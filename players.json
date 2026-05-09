@@ -1,0 +1,25 @@
+{
+  "_comment": "Curated list of chess.com handles for the fingerprint dataset. Mix of elite pros and big streamers. Edit freely. Aliases lets us merge known alt accounts under one identity.",
+  "players": [
+    {"id": "magnus_carlsen",        "handle": "MagnusCarlsen",       "name": "Magnus Carlsen",        "tier": "elite",    "aliases": ["DrDrunkenstein", "DannyTheDonkey", "DrNykterstein"]},
+    {"id": "hikaru_nakamura",       "handle": "Hikaru",              "name": "Hikaru Nakamura",       "tier": "elite",    "aliases": []},
+    {"id": "fabiano_caruana",       "handle": "FabianoCaruana",      "name": "Fabiano Caruana",       "tier": "elite",    "aliases": []},
+    {"id": "alireza_firouzja",      "handle": "Firouzja2003",        "name": "Alireza Firouzja",      "tier": "elite",    "aliases": []},
+    {"id": "ian_nepomniachtchi",    "handle": "lachesisQ",           "name": "Ian Nepomniachtchi",    "tier": "elite",    "aliases": []},
+    {"id": "wesley_so",             "handle": "GMWSO",               "name": "Wesley So",             "tier": "elite",    "aliases": []},
+    {"id": "anish_giri",            "handle": "AnishGiri",           "name": "Anish Giri",            "tier": "elite",    "aliases": []},
+    {"id": "levon_aronian",         "handle": "LevonAronian",        "name": "Levon Aronian",         "tier": "elite",    "aliases": []},
+    {"id": "daniil_dubov",          "handle": "Duhless",             "name": "Daniil Dubov",          "tier": "elite",    "aliases": []},
+    {"id": "hans_niemann",          "handle": "Hans-Moke-Niemann",   "name": "Hans Niemann",          "tier": "elite",    "aliases": []},
+    {"id": "daniel_naroditsky",     "handle": "DanielNaroditsky",    "name": "Daniel Naroditsky",     "tier": "streamer", "aliases": []},
+    {"id": "levy_rozman",           "handle": "GothamChess",         "name": "Levy Rozman",           "tier": "streamer", "aliases": []},
+    {"id": "eric_rosen",            "handle": "EricRosen",           "name": "Eric Rosen",            "tier": "streamer", "aliases": []},
+    {"id": "anna_cramling",         "handle": "AnnaCramling",        "name": "Anna Cramling",         "tier": "streamer", "aliases": []},
+    {"id": "alexandra_botez",       "handle": "alexandravbotez",     "name": "Alexandra Botez",       "tier": "streamer", "aliases": []},
+    {"id": "andrea_botez",          "handle": "andreabotezlive",     "name": "Andrea Botez",          "tier": "streamer", "aliases": []},
+    {"id": "ben_finegold",          "handle": "GMBenjaminFinegold",  "name": "Ben Finegold",          "tier": "streamer", "aliases": []},
+    {"id": "anna_rudolf",           "handle": "AnnaRudolf",          "name": "Anna Rudolf",           "tier": "streamer", "aliases": []},
+    {"id": "sam_shankland",         "handle": "GMShanky",            "name": "Sam Shankland",         "tier": "elite",    "aliases": []},
+    {"id": "vidit_gujrathi",        "handle": "ViditChess",          "name": "Vidit Gujrathi",        "tier": "streamer", "aliases": []}
+  ]
+}
