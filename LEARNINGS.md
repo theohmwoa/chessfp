@@ -114,19 +114,32 @@ Cost: one biggish linear layer (~2M params, model goes 3.4M → 5M). Benefit: th
 
 ### 4. After the fix — current numbers
 
-3-player CE smoke test (Hikaru / Magnus / Levy), 200 steps:
-- step 25:  acc 0.350 (vs 0.333 random)
-- step 100: acc 0.407,  val top1 = **0.374**
-- step 200: acc 0.423,  val top1 = **0.453**
+**3-player CE smoke test** (Hikaru / Magnus / Levy), 200 steps, ~2 minutes wall time on Apple Silicon (MPS):
 
-Full 14-player CE+SupCon, 600+ steps in:
-- step 250: train acc 0.140, val top1 0.102, separation +0.002
-- step 500: train acc 0.207, val top1 0.134, separation +0.008
-- step 600: train acc 0.212, supcon still flat at 3.82
+| step | train acc | val top1 |
+|-----:|----------:|---------:|
+|  25  | 0.350 (random 0.333) | — |
+| 100  | 0.407 | 0.374 |
+| 200  | 0.423 | **0.453** |
 
-So: train accuracy is climbing steadily (~3× random), val top-1 is 1.9–2.5× random, embedding separation is small but positive (0.008) and trending up. The model is learning. SupCon hasn't kicked in fully yet — it needs CE to first carve out class-discriminative directions, then it shapes the cosine geometry on top.
+**Full 14-player CE + SupCon** (`--loss-mode ce+supcon`, supcon weight 0.5, batch = 12 players × 4 games = 48 games):
 
-Not yet at the McIlroy-Young 98% level — that paper had millions of games per player and a much bigger model. This is a portfolio-scale demonstration.
+| step | train acc | val top1 (random 0.071) | separation | wall time |
+|-----:|----------:|------------------------:|-----------:|----------:|
+|  50  | 0.083 | —     | —     | 35 s |
+| 250  | 0.140 | 0.102 | +0.002 | 4 min |
+| 500  | 0.207 | 0.134 | +0.008 | 13 min |
+| 750  | 0.237 | **0.163** | **+0.017** | 22 min |
+| 1000 | (TBD) | (TBD) | (TBD) | ~30 min |
+| 1500 | (TBD) | (TBD) | (TBD) | ~45 min |
+
+Each ~250 steps is buying ~+0.03 val top-1 and roughly doubling cosine separation. Train and val accuracy are climbing in parallel (no overfitting yet).
+
+**Hardware:** Apple M-series, MPS backend. Average ~1.8 s/step (variable 0.8–3 s/step depending on system load) for the 14-player setup. CPU fallback works but is materially slower.
+
+**Throughput:** 48 games/batch × ~50 focal decisions/game = ~2,400 board+move tensors per forward pass. Each tensor is 24 × 8 × 8 uint8 = 1,536 bytes. So roughly 3.7 MB of inputs flow through the CNN per step.
+
+**Trajectory and what it means:** the model IS learning at ~2.3× random val top-1 and the supcon component is finally engaging now that CE has carved class-discriminative directions for it. Not yet at the McIlroy-Young 98% level — that paper had millions of games per player, a much bigger model, and trained for far longer. This is a portfolio-scale demonstration.
 
 ## Things I'd do differently next time
 

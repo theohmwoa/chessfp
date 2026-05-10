@@ -86,17 +86,28 @@ python scripts/build_dataset.py
 ## Train
 
 ```bash
-# CE-only, 1500 steps on the full 14-player corpus
+# CE+SupCon, 1500 steps on the full 14-player corpus
 python scripts/train.py \
   --steps 1500 --eval-every 250 --log-every 50 \
   --warmup-steps 200 --lr 3e-4 \
-  --loss-mode ce \
+  --loss-mode ce+supcon --supcon-weight 0.5 \
   --n-players-per-batch 12 --games-per-player 4 \
   --min-games-per-player 50 \
   --out-dir checkpoints/full
 ```
 
-Use `--loss-mode ce+supcon` to also shape the embedding geometry for cosine similarity (needed for the `playlike` demo to work well).
+Use `--loss-mode ce` for classification only (faster but no cosine-similarity structure for the `playlike` demo). Use `--loss-mode ce+supcon` to also shape the embedding geometry — recommended for the demo.
+
+**Time and accuracy on Apple Silicon (M-series, MPS):**
+
+| steps | wall time | val top-1 (random = 0.071, n=14) | separation |
+|------:|----------:|---------------------------------:|-----------:|
+|   250 | ~4 min    | 0.10                             | +0.002     |
+|   500 | ~13 min   | 0.13                             | +0.008     |
+|   750 | ~22 min   | 0.16                             | +0.017     |
+| 1500  | ~45 min   | (extrapolated 0.20–0.22)         | —          |
+
+Average step time on MPS is ~1.8 s/step at batch 48; CPU fallback works but is ~3× slower. See [`LEARNINGS.md`](LEARNINGS.md) for the trajectory and the architectural fix that made training start working in the first place.
 
 ## Demo: who does this user play like?
 
