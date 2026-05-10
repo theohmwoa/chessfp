@@ -77,10 +77,18 @@ def archive_url_to_yyyymm(archive_url: str) -> str:
     return f"{parts[-2]}-{parts[-1]}"
 
 
-def fetch_player(client: ChessComClient, player: dict, out_dir: Path) -> FetchStats:
+def fetch_player(
+    client: ChessComClient,
+    player: dict,
+    out_dir: Path,
+    since: str | None = None,
+) -> FetchStats:
     """Fetch all monthly archives for a player and any known aliases.
 
     Layout: out_dir/{player_id}/{handle}/{YYYY-MM}.json
+
+    Args:
+        since: optional "YYYY-MM" cutoff; only archives >= this month are fetched.
     """
     stats = FetchStats()
     handles = [player["handle"], *player.get("aliases", [])]
@@ -97,6 +105,8 @@ def fetch_player(client: ChessComClient, player: dict, out_dir: Path) -> FetchSt
         handle_dir.mkdir(exist_ok=True)
         for archive_url in archives:
             yyyymm = archive_url_to_yyyymm(archive_url)
+            if since is not None and yyyymm < since:
+                continue
             out_path = handle_dir / f"{yyyymm}.json"
             if out_path.exists() and out_path.stat().st_size > 0:
                 stats.skipped_archives += 1

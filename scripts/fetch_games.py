@@ -31,6 +31,8 @@ def main() -> int:
     p.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     p.add_argument("--only", nargs="*", default=None, help="Only fetch these player ids")
     p.add_argument("--rate", type=float, default=1.0, help="Min seconds between requests")
+    p.add_argument("--since", type=str, default=None,
+                   help="Only fetch archives >= this YYYY-MM (e.g. 2026-01)")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args()
 
@@ -55,7 +57,7 @@ def main() -> int:
     for player in players:
         logging.info("=== %s (%s) ===", player["name"], player["handle"])
         try:
-            s = fetch_player(client, player, args.out_dir)
+            s = fetch_player(client, player, args.out_dir, since=args.since)
         except Exception as e:
             logging.exception("failed %s: %s", player["id"], e)
             continue
