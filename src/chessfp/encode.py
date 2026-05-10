@@ -1,11 +1,18 @@
-"""Encode chess.Board states to fixed-shape tensors for the model.
+"""Encode chess.Board states and moves to fixed-shape tensors for the model.
 
-18 channels × 8 × 8 uint8:
+Board: 18 channels × 8 × 8 uint8
   0–5   : white pieces (P, N, B, R, Q, K)
   6–11  : black pieces (P, N, B, R, Q, K)
   12    : side to move (1 = white)
   13–16 : castling rights (WK, WQ, BK, BQ)
   17    : en passant target square
+
+Move: 6 channels × 8 × 8 uint8
+  0     : from-square (one-hot)
+  1     : to-square   (one-hot)
+  2–5   : promotion piece (N, B, R, Q) — all-ones plane if promoting
+
+Total model input: 24 channels × 8 × 8.
 """
 from __future__ import annotations
 
@@ -17,7 +24,10 @@ import numpy as np
 from .parse import ParsedGame
 
 _PIECE_TYPES = (chess.PAWN, chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN, chess.KING)
+_PROMO_PIECES = (chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN)
 N_CHANNELS = 18
+N_MOVE_CHANNELS = 6
+N_INPUT_CHANNELS = N_CHANNELS + N_MOVE_CHANNELS  # 24
 
 
 def board_to_tensor(board: chess.Board) -> np.ndarray:
@@ -53,6 +63,25 @@ def iter_focal_positions(game: ParsedGame) -> Iterator[tuple[np.ndarray, str]]:
         if is_focal_turn:
             yield board_to_tensor(board), move_uci
         board.push(move)
+
+
+def move_to_channels(move_uci: str) -> np.ndarray:
+    """Encode a UCI move string into (6, 8, 8) uint8 channels."""
+    arr = np.zeros((N_MOVE_CHANNELS, 8, 8), dtype=np.uint8)
+    move = chess.Move.from_uci(move_uci)
+    arr[0, chess.square_rank(move.from_square), chess.square_file(move.from_square)] = 1
+    arr[1, chess.square_rank(move.to_square), chess.square_file(move.to_square)] = 1
+    if move.promotion is not None:
+        promo_idx = _PROMO_PIECES.index(move.promotion)  # 0..3
+        arr[2 + promo_idx, :, :] = 1
+    return arr
+
+
+def moves_to_channels(moves_uci: list[str]) -> np.ndarray:
+    """Vectorized: list of UCI strings -> (N, 6, 8, 8) uint8."""
+    if not moves_uci:
+        return np.empty((0, N_MOVE_CHANNELS, 8, 8), dtype=np.uint8)
+    return np.stack([move_to_channels(m) for m in moves_uci], axis=0)
 
 
 def encode_game(game: ParsedGame) -> tuple[np.ndarray, list[str]]:
