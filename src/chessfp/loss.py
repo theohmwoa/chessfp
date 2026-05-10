@@ -58,3 +58,14 @@ def supcon_loss(
     if not valid.any():
         return embeddings.sum() * 0.0
     return per_anchor[valid].mean()
+
+
+def variance_regularization(embeddings: torch.Tensor, target_std: float = 1.0) -> torch.Tensor:
+    """VICReg-style variance term: penalize per-dim std falling below `target_std`.
+
+    Computed on the *un-normalized* embeddings so it has teeth — once you've
+    L2-normalized to the unit sphere, per-dim std is constrained and the
+    signal goes away. Apply this directly on model.forward(x, mask).
+    """
+    std = torch.sqrt(embeddings.var(dim=0) + 1e-6)
+    return F.relu(target_std - std).mean()

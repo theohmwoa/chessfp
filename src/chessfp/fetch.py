@@ -15,7 +15,13 @@ from pathlib import Path
 import requests
 
 API_BASE = "https://api.chess.com/pub"
-USER_AGENT = "chessfp/0.0.1 (contact: theophilus.homawoo@mantiq.com)"
+# chess.com asks for contact info in User-Agent. Override with CHESSFP_CONTACT
+# env var or by editing this line. Don't ship as-is — they may rate-limit
+# placeholder agents.
+import os as _os
+USER_AGENT = (
+    f"chessfp/0.0.1 (contact: {_os.environ.get('CHESSFP_CONTACT', 'chessfp-dev@example.com')})"
+)
 
 log = logging.getLogger(__name__)
 
