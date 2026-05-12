@@ -1,55 +1,89 @@
 # chessfp — Chess Fingerprint
 
-Identify a chess.com player from their moves alone, and tell anyone *which pro they play like*.
+> Identify a chess.com player from their moves alone, and tell anyone *which pro they play like*.
 
-A behavioral-stylometry model trained on a curated set of chess.com pros and streamers (Magnus, Hikaru, Naroditsky, Levy/GothamChess, Firouzja, Anna Cramling, Ben Finegold, etc.). End-to-end pipeline: scrape chess.com → encode boards + moves into tensors → train a CNN-over-board → transformer-over-game model → embedding-based inference.
+```
+$ python scripts/playlike.py Hikaru --since 2025-09 --top-k 5
 
-> **Status: in-progress / educational.** The data pipeline and architecture are working end-to-end. Training accuracy is currently ~2.5× random baseline on 14 players (tracked best at ~21% top-1 train accuracy / ~13% val top-1 vs. 7% random) and climbing. This is a portfolio/learning project — see [`LEARNINGS.md`](LEARNINGS.md) for the engineering journey including the failed attempts.
+=== style match for @Hikaru (2,663 games) ===
+rank  pro                           cos   spread  bar
+   1.  hikaru_nakamura           +0.913    1.00   ########################################   ← correct
+   2.  levy_rozman               +0.913    1.00   #######################################
+   3.  andrea_botez              +0.892    0.85   ##################################
+   4.  fabiano_caruana           +0.880    0.77   ##############################
+   5.  ian_nepomniachtchi        +0.880    0.77   ##############################
+```
+
+A behavioral-stylometry model that fingerprints chess.com pros and streamers (Magnus, Hikaru, Naroditsky, GothamChess, Firouzja, Anna Cramling, Ben Finegold, ...) from their move sequences alone. Trained from scratch on **124,599 games / 5.7M decisions** scraped from the chess.com public API.
+
+End-to-end pipeline: scrape → encode 18-channel board + 6-channel move tensors → CNN-per-decision → transformer-per-game → contrastive embedding. ~3.4M parameters, trains on Apple Silicon MPS in ~2 hours.
+
+## Visual story
+
+**1. The training curve** — val top-1 climbs from 7.1% random to 26.9% over 5,000 steps. The cosine separation between embeddings of different players (purple, bottom panel) grows monotonically — the model is genuinely learning style geometry.
+
+![training curve](viz/training_curve.png)
+
+**2. Confusion matrix** — per-player identification accuracy (row = true player, column = predicted). Best result on the full corpus.
+
+![confusion matrix](viz/confusion_matrix.png)
+
+The big surprise: **streamers and pedagogical players are trivial to identify; elite super-GMs are essentially inseparable from each other.** Anna Cramling: 83% per-class accuracy. Hikaru: 65%. Levy: 56%. Magnus Carlsen: **1%**. Wesley So: 1%. Fabiano Caruana: 5%.
+
+This is a real finding, not a training failure — elite super-GMs converge on engine-approved play and produce decision distributions that overlap so heavily they form a single behavioral cluster. We confirmed this across every loss function we tried (CE, SupCon, ArcFace, CE+SupCon, ArcFace+SupCon) and across `max_len ∈ {128, 256}`.
+
+**3. UMAP of game embeddings** — the Anna Cramling cluster (dark green, far right) is visibly distinct. The elite-GM blob lives in the center-left.
+
+![embeddings UMAP](viz/final/embeddings_umap.png)
+
+## Headline numbers (14 players, val split)
+
+| Model                  | val top-1 | top-5  | centroid acc | sep    | best at  |
+|------------------------|----------:|-------:|-------------:|-------:|:--------:|
+| Random baseline (1/14) | 0.071     | 0.357  | —            | —      | —        |
+| CE+SupCon, max_len=128 | 0.263     | 0.629  | **0.343**    | +0.061 | step 4500|
+| ArcFace fine-tune      | 0.268     | 0.620  | 0.329        | +0.034 | step 5250|
+| **ArcFace+SupCon FT**  | **0.269** | 0.623  | 0.329        | +0.044 | step 5000|
+| CE+SupCon, max_len=256 | 0.252     | 0.627  | 0.320        | +0.056 | step 3750|
+
+Best val top-1: **3.8× random**. McIlroy-Young (NeurIPS 2021) hit 98% accuracy on 2,500 Lichess players with millions of games per player; we hit 27% on 14 chess.com pros with ~5k–35k games each. The gap is data scale, not architecture.
 
 ## Why this exists
 
-Behavioral stylometry in chess has been shown to work very well — McIlroy-Young et al. (NeurIPS 2021) hit 98% accuracy across 2,500 Lichess players using transformer architectures. What hasn't been built is a polished, public-facing tool focused on the **chess.com pro/streamer ecosystem** — that's the gap this project aims at.
+McIlroy-Young et al. showed behavioral stylometry in chess works incredibly well — but their work used Lichess amateurs, not chess.com pros, and was never productized. This project is the polished, public-facing version focused on the **chess.com pro/streamer ecosystem**.
 
-## What works
+See [`LEARNINGS.md`](LEARNINGS.md) for the full engineering journey including:
 
-- **Chess.com fetcher** — rate-limited, resumable, alias-aware (handles Magnus's known smurf accounts). Pulled 805 MB / 124k games / 5.7M decisions across 16 active handles in ~17 minutes.
-- **PGN parser + filters** — keeps rated rapid+blitz only, standard-start games only, ≥20 plies. Skip reasons tracked.
-- **Board+move encoder** — 18-channel board (piece planes + side-to-move + castling + en passant) + 6-channel move (from-sq, to-sq, promotion flags) = 24 channels × 8 × 8 uint8 per decision.
-- **Dataset format** — one parquet per player, zstd-compressed, ~70× smaller on disk than raw tensors. Round-trip verified.
-- **Architecture** — ResNet CNN (with `flatten + linear`, NOT global average pool — see LEARNINGS.md for why) → transformer over per-game decisions → masked mean-pool → optional classifier head. ~3.4M params.
-- **Training loop** — supports `ce`, `supcon`, or `ce+supcon` loss modes; warmup, gradient clipping, checkpointing.
-- **Inference CLI** (`scripts/playlike.py`) — fetches a chess.com user's games, embeds them, cosine-ranks against per-pro centroids.
+- **Why the model didn't learn at all for ~6 hours** (global average pool over the 8×8 CNN feature map was destroying the per-square spatial info — flatten+linear was the breakthrough)
+- **Why SupCon-alone collapsed** (cold-start instability — needed CE supervision to break out)
+- **Why ArcFace from random init was stuck at acc=0** (margin punishes the target class when embeddings aren't aligned with class weights — needed CE-pretrained backbone)
+- **Why doubling `max_len` was a wash overall but +0.07 for Hikaru specifically** (his long blitz games actually used the extra context)
 
-## What didn't work (yet)
-
-- **Pure supervised contrastive (SupCon)** trained on its own — embeddings collapse to a single point on the unit sphere even with grad clipping, GroupNorm, and variance regularization. Need cross-entropy supervision to break collapse.
-- **Global average pool over the 8×8 CNN feature map** — destroys exactly the spatial structure that distinguishes player styles. Switching to flatten+linear was the breakthrough.
-- **Several handle typos in `players.json`** — Eric Rosen, Alexandra Botez, Sam Shankland, Anna Rudolf returned no archives because the chess.com handle field in the curated list was wrong. The pipeline correctly logs and skips these.
-
-See [`LEARNINGS.md`](LEARNINGS.md) for the full debugging journey.
-
-## Layout
+## What's in the box
 
 ```
-chessengine/
+chessfp/
 ├── src/chessfp/
-│   ├── fetch.py       # chess.com Published-Data API client
-│   ├── parse.py       # JSON archive → ParsedGame, with filters
-│   ├── encode.py      # board / move → uint8 tensor channels
-│   ├── dataset.py     # parquet reader
-│   ├── model.py       # CNN + transformer + classifier head
-│   ├── loss.py        # SupCon, variance-regularization
-│   └── train.py       # PK-sampler + training loop + k-shot eval
+│   ├── fetch.py       chess.com Published-Data API client (rate-limited, resumable)
+│   ├── parse.py       JSON archive → ParsedGame, with filters
+│   ├── encode.py      board / move → 24×8×8 uint8 tensor channels
+│   ├── dataset.py     parquet reader
+│   ├── model.py       CNN + transformer + optional classifier head
+│   ├── loss.py        SupCon, ArcFace, variance regularization
+│   └── train.py       PK-sampler + training loop + k-shot eval
 ├── scripts/
-│   ├── fetch_games.py # CLI: pull archives
-│   ├── build_dataset.py # CLI: parse → parquet
-│   ├── train.py       # CLI: training entry point
-│   └── playlike.py    # CLI: "who does this user play like?"
-├── data/              # gitignored
-│   ├── raw/           # chess.com JSON archives
-│   └── processed/     # parquet datasets
-├── checkpoints/       # gitignored
-├── players.json       # curated chess.com handles
+│   ├── fetch_games.py         CLI: pull archives
+│   ├── build_dataset.py       CLI: parse → parquet
+│   ├── train.py               CLI: training entry point
+│   ├── playlike.py            CLI: who does this user play like?
+│   ├── style_compare.py       CLI: cosine similarity between two users
+│   ├── confusion_matrix.py    CLI: per-class confusion image
+│   ├── visualize_embeddings.py CLI: PCA + UMAP projection
+│   └── plot_history.py        CLI: training curve image
+├── data/              gitignored — raw archives + parquets
+├── checkpoints/       gitignored — trained model weights
+├── viz/               saved visualizations
+├── players.json       curated chess.com handles
 └── requirements.txt
 ```
 
@@ -60,71 +94,59 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# Optional: set the contact email chess.com sees in your User-Agent
+# chess.com asks for contact info in your User-Agent
 export CHESSFP_CONTACT="you@example.com"
 ```
 
-## Pull data
+## End-to-end run
 
 ```bash
-# Everyone in players.json since 2021-01:
+# 1. Fetch games (16 active handles × 5 years ≈ 17 min, 800 MB)
 python scripts/fetch_games.py --since 2021-01
 
-# Or just one player:
-python scripts/fetch_games.py --only hikaru_nakamura --since 2024-01
-```
-
-The fetcher is rate-limited (1 req/sec by default), resumable (skips already-downloaded months), and respects chess.com's published API guidelines.
-
-## Build the training set
-
-```bash
+# 2. Build training set (parses 124k games into 33 MB of parquet)
 python scripts/build_dataset.py
-# writes data/processed/{player_id}.parquet
-```
 
-## Train
-
-```bash
-# CE+SupCon, 1500 steps on the full 14-player corpus
+# 3. Train (CE+SupCon, ~45 min on Apple Silicon MPS)
 python scripts/train.py \
-  --steps 1500 --eval-every 250 --log-every 50 \
+  --steps 1500 --eval-every 250 \
   --warmup-steps 200 --lr 3e-4 \
   --loss-mode ce+supcon --supcon-weight 0.5 \
   --n-players-per-batch 12 --games-per-player 4 \
-  --min-games-per-player 50 \
   --out-dir checkpoints/full
+
+# 4. Demo
+python scripts/playlike.py YourHandle --since 2025-01 --top-k 10
 ```
 
-Use `--loss-mode ce` for classification only (faster but no cosine-similarity structure for the `playlike` demo). Use `--loss-mode ce+supcon` to also shape the embedding geometry — recommended for the demo.
-
-**Time and accuracy on Apple Silicon (M-series, MPS):**
-
-| steps | wall time | val top-1 (random = 0.071, n=14) | separation |
-|------:|----------:|---------------------------------:|-----------:|
-|   250 | ~4 min    | 0.10                             | +0.002     |
-|   500 | ~13 min   | 0.13                             | +0.008     |
-|   750 | ~22 min   | 0.16                             | +0.017     |
-| 1500  | ~45 min   | (extrapolated 0.20–0.22)         | —          |
-
-Average step time on MPS is ~1.8 s/step at batch 48; CPU fallback works but is ~3× slower. See [`LEARNINGS.md`](LEARNINGS.md) for the trajectory and the architectural fix that made training start working in the first place.
-
-## Demo: who does this user play like?
+For the best result: fine-tune from the CE+SupCon checkpoint with ArcFace+SupCon for another ~80 min:
 
 ```bash
-python scripts/playlike.py MagnusCarlsen --since 2025-01 --top-k 10
+python scripts/train.py \
+  --steps 1500 --warmup-steps 100 --lr 1e-4 \
+  --loss-mode arcface+supcon --arcface-margin 0.15 --supcon-weight 0.5 \
+  --resume checkpoints/full/best.pt \
+  --out-dir checkpoints/arcsup_ft
 ```
 
-(Quality of the answer depends on how trained the checkpoint is.)
+## Compare two users' styles
+
+```bash
+python scripts/style_compare.py Hikaru MagnusCarlsen --since 2025-01
+```
+
+Outputs cosine similarity between the two users' centroids, plus each one's top-3 pro matches, plus a "reference scale" of pro-vs-pro similarities so you know what's "close" in this embedding space.
 
 ## Data source
 
-[chess.com Published-Data API](https://www.chess.com/news/view/published-data-api) — public, no auth required, free. Be polite: include a contact email in the User-Agent (`CHESSFP_CONTACT` env var) and keep request rate ≲ 1/s.
+[chess.com Published-Data API](https://www.chess.com/news/view/published-data-api) — public, no auth required, free. Be polite: identify yourself with the `CHESSFP_CONTACT` env var, keep request rate ≲ 1/s.
 
 ## Prior art
 
 - McIlroy-Young, Wang, Sen, Kleinberg, Anderson — *Detecting Individual Decision-Making Style: Exploring Behavioral Stylometry in Chess* (NeurIPS 2021). [paper](https://arxiv.org/abs/2208.01366) · [code](https://github.com/CSSLab/maia-individual)
 - [Maia Chess](https://www.maiachess.com/) — same group, personalized human-move prediction.
+- Khosla et al. — *Supervised Contrastive Learning* (NeurIPS 2020). [paper](https://arxiv.org/abs/2004.11362)
+- Deng et al. — *ArcFace: Additive Angular Margin Loss for Deep Face Recognition* (CVPR 2019). [paper](https://arxiv.org/abs/1801.07698)
 
 ## License
 
