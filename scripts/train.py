@@ -30,8 +30,12 @@ def main() -> int:
     p.add_argument("--n-players-per-batch", type=int, default=8)
     p.add_argument("--games-per-player", type=int, default=4)
     p.add_argument("--max-len", type=int, default=128)
-    p.add_argument("--loss-mode", default="ce", choices=["ce", "supcon", "ce+supcon"],
-                   help="ce: classification only; supcon: contrastive only; ce+supcon: both")
+    p.add_argument("--loss-mode", default="ce",
+                   choices=["ce", "supcon", "ce+supcon", "arcface", "arcface+supcon"],
+                   help="ce/supcon/ce+supcon or arcface variants (angular margin softmax)")
+    p.add_argument("--arcface-margin", type=float, default=0.30,
+                   help="radians; ~0.3 = 17°, ArcFace paper used 0.5")
+    p.add_argument("--arcface-scale", type=float, default=30.0)
     p.add_argument("--supcon-weight", type=float, default=1.0)
     p.add_argument("--variance-weight", type=float, default=0.0,
                    help="VICReg variance reg; only useful when not using CE")
@@ -42,6 +46,8 @@ def main() -> int:
     p.add_argument("--min-games-per-player", type=int, default=8)
     p.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--resume", type=str, default="",
+                   help="Path to a checkpoint .pt to resume from. --steps becomes additional steps.")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args()
 
@@ -67,10 +73,13 @@ def main() -> int:
         supcon_weight=args.supcon_weight,
         variance_weight=args.variance_weight,
         temperature=args.temperature,
+        arcface_margin=args.arcface_margin,
+        arcface_scale=args.arcface_scale,
         val_frac=args.val_frac,
         min_games_per_player=args.min_games_per_player,
         device=args.device,
         seed=args.seed,
+        resume=args.resume,
     )
     result = train(cfg)
     print(f"\nbest top1: {result['best_metric']:.3f} on {result['n_train_players']} players")

@@ -143,6 +143,8 @@ def main() -> int:
     p.add_argument("--centroids-cache", type=Path, default=ROOT / "checkpoints" / "full" / "centroids.npz")
     p.add_argument("--since", default="2025-01", help="Only consider user's games since YYYY-MM")
     p.add_argument("--top-k", type=int, default=10)
+    p.add_argument("--show-top-games", type=int, default=3,
+                   help="Show the user's games most similar to the top-matched pro.")
     p.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args()
@@ -185,10 +187,30 @@ def main() -> int:
         key=lambda x: -x[1],
     )
 
+    # Re-scale into "spread" — the raw cosines are usually tight (e.g. 0.95–1.00),
+    # so present the rank-percentage relative to the spread for readability.
+    raw = np.array([s for _, s in sims])
+    if raw.max() - raw.min() > 1e-6:
+        spread = (raw - raw.min()) / (raw.max() - raw.min())
+    else:
+        spread = np.zeros_like(raw)
+
     print(f"\n=== style match for @{args.handle} ({len(user_games)} games) ===")
-    for i, (pid, sim) in enumerate(sims[: args.top_k], 1):
-        bar = "#" * max(0, int((sim + 1) * 20))
-        print(f"  {i:2d}. {pid:<25} cos={sim:+.3f}  {bar}")
+    print(f"{'rank':>4}  {'pro':<25} {'cos':>7}  {'spread':>7}  bar")
+    for i, ((pid, sim), s) in enumerate(zip(sims[: args.top_k], spread[: args.top_k]), 1):
+        bar = "#" * int(s * 40)
+        print(f"  {i:2d}.  {pid:<25} {sim:+.4f}  {s:>6.2f}   {bar}")
+
+    # Also: contribution per user game — which of their games are most "like the top pro"?
+    if args.show_top_games > 0:
+        top_pid, _ = sims[0]
+        top_proto = centroids[top_pid]
+        per_game = user_embs @ top_proto  # cosines per game
+        order = np.argsort(-per_game)
+        print(f"\n  Top {args.show_top_games} of @{args.handle}'s games most like {top_pid}:")
+        for j in order[: args.show_top_games]:
+            g = user_games[j]
+            print(f"    cos={per_game[j]:+.3f}  https://www.chess.com/live/game/{g.game_id}  ({g.time_class}, {g.focal_color}, {g.result})")
     return 0
 
 

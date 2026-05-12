@@ -69,3 +69,49 @@ def variance_regularization(embeddings: torch.Tensor, target_std: float = 1.0) -
     """
     std = torch.sqrt(embeddings.var(dim=0) + 1e-6)
     return F.relu(target_std - std).mean()
+
+
+def arcface_logits(
+    embeddings: torch.Tensor,
+    weight: torch.Tensor,
+    labels: torch.Tensor,
+    margin: float = 0.30,
+    scale: float = 30.0,
+) -> torch.Tensor:
+    """ArcFace (Deng et al. 2019) margin-adjusted logits.
+
+    Computes cosine similarity between L2-normalized embeddings and L2-normalized
+    class weights, then subtracts an additive angular margin from the target
+    class's cos(θ) — i.e. uses cos(θ + m) instead of cos(θ) — and scales by `s`.
+    Pass the returned logits into nn.functional.cross_entropy.
+
+    Args:
+        embeddings: (B, D) — raw embeddings (will be normalized here)
+        weight:     (n_classes, D) — classifier weights (will be normalized here)
+        labels:     (B,) long — true class indices
+        margin:     angular margin in radians (~0.3 = 17°, ArcFace paper uses 0.5)
+        scale:      logit scale; bigger → sharper softmax
+
+    Returns logits of shape (B, n_classes).
+    """
+    import math
+    cos_m = math.cos(margin)
+    sin_m = math.sin(margin)
+
+    emb_n = F.normalize(embeddings, dim=-1)
+    w_n = F.normalize(weight, dim=-1)
+    cos_theta = emb_n @ w_n.T  # (B, n_classes), each in [-1, 1]
+    cos_theta = cos_theta.clamp(-1 + 1e-7, 1 - 1e-7)
+    sin_theta = torch.sqrt(1.0 - cos_theta * cos_theta)
+    # cos(θ + m) = cos·cos_m − sin·sin_m
+    cos_theta_m = cos_theta * cos_m - sin_theta * sin_m
+
+    # Numerical guard: when θ + m > π, fall back to cos(θ) − m·sin(m) so the
+    # gradient stays well-defined (ArcFace "easy margin" trick).
+    th = math.cos(math.pi - margin)
+    mm = math.sin(math.pi - margin) * margin
+    cos_theta_m = torch.where(cos_theta > th, cos_theta_m, cos_theta - mm)
+
+    one_hot = torch.zeros_like(cos_theta).scatter_(1, labels.unsqueeze(1), 1.0)
+    logits = one_hot * cos_theta_m + (1.0 - one_hot) * cos_theta
+    return logits * scale

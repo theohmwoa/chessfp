@@ -22,7 +22,7 @@ import torch
 
 from .dataset import GameRecord, read_games
 from .encode import N_INPUT_CHANNELS, moves_to_channels
-from .loss import supcon_loss, variance_regularization
+from .loss import arcface_logits, supcon_loss, variance_regularization
 from .model import StyleModel
 
 log = logging.getLogger(__name__)
@@ -48,11 +48,13 @@ class TrainConfig:
     max_len: int = 128
 
     # Loss
-    loss_mode: str = "ce"            # "ce", "supcon", or "ce+supcon"
+    loss_mode: str = "ce"            # "ce", "supcon", "ce+supcon", "arcface", "arcface+supcon"
     temperature: float = 0.1
     supcon_weight: float = 1.0
     variance_weight: float = 0.0     # VICReg-style anti-collapse (off when CE is on)
     target_std: float = 1.0
+    arcface_margin: float = 0.30     # radians (~17°); ArcFace paper uses 0.5
+    arcface_scale: float = 30.0
 
     # Model
     d_model: int = 256
@@ -70,6 +72,7 @@ class TrainConfig:
     # System
     device: str = "auto"
     seed: int = 0
+    resume: str = ""  # path to checkpoint .pt to resume from (empty = fresh)
 
 
 # ---------------------------------------------------------------- helpers
@@ -307,7 +310,7 @@ def train(cfg: TrainConfig) -> dict:
         player_to_label=player_to_label,
     )
 
-    needs_classifier = "ce" in cfg.loss_mode
+    needs_classifier = "ce" in cfg.loss_mode or "arcface" in cfg.loss_mode
     model = StyleModel(
         d_model=cfg.d_model,
         cnn_ch=cfg.cnn_ch,
@@ -324,7 +327,24 @@ def train(cfg: TrainConfig) -> dict:
 
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
+    start_step = 0
+    if cfg.resume:
+        resume_path = Path(cfg.resume)
+        log.info("resuming from %s", resume_path)
+        rckpt = torch.load(resume_path, map_location=device, weights_only=False)
+        try:
+            model.load_state_dict(rckpt["state_dict"])
+        except RuntimeError as e:
+            log.warning("strict load failed, retrying non-strict: %s", e)
+            model.load_state_dict(rckpt["state_dict"], strict=False)
+        if "opt_state" in rckpt:
+            opt.load_state_dict(rckpt["opt_state"])
+            log.info("  loaded optimizer state")
+        start_step = int(rckpt.get("step", 0))
+        log.info("  resumed at step %d (prev best=%.3f)", start_step, rckpt.get("metric", 0.0))
+
     def lr_at(step: int) -> float:
+        # warmup runs once from step 0; if resuming past it, full LR.
         if cfg.warmup_steps > 0 and step <= cfg.warmup_steps:
             return cfg.lr * step / max(1, cfg.warmup_steps)
         return cfg.lr
@@ -339,7 +359,8 @@ def train(cfg: TrainConfig) -> dict:
     running_loss = running_sup = running_var = 0.0
     running_n = 0
     running_ce = running_acc = 0.0
-    for step in range(1, cfg.steps + 1):
+    total_steps = start_step + cfg.steps
+    for step in range(start_step + 1, total_steps + 1):
         model.train()
         x, mask, y_batch, y_global, _ = sampler.sample()
         x = x.to(device)
@@ -351,14 +372,24 @@ def train(cfg: TrainConfig) -> dict:
             g["lr"] = lr_at(step)
 
         if needs_classifier:
-            raw, logits = model.classify(x, mask)
+            raw = model.forward(x, mask)
+            if "arcface" in cfg.loss_mode:
+                logits = arcface_logits(
+                    raw,
+                    model.classifier.weight,
+                    y_global,
+                    margin=cfg.arcface_margin,
+                    scale=cfg.arcface_scale,
+                )
+            else:
+                logits = model.classifier(raw)
         else:
             raw = model.forward(x, mask)
             logits = None
 
         ce_loss = torch.tensor(0.0, device=device)
         acc = 0.0
-        if "ce" in cfg.loss_mode and logits is not None:
+        if ("ce" in cfg.loss_mode or "arcface" in cfg.loss_mode) and logits is not None:
             ce_loss = torch.nn.functional.cross_entropy(logits, y_global)
             acc = (logits.argmax(dim=-1) == y_global).float().mean().item()
 
@@ -389,7 +420,7 @@ def train(cfg: TrainConfig) -> dict:
             n = running_n
             log.info(
                 "step %4d/%-4d  loss=%.4f  ce=%.4f acc=%.3f  sup=%.4f var=%.4f  (%.1fs)",
-                step, cfg.steps,
+                step, total_steps,
                 running_loss / n, running_ce / n, running_acc / n,
                 running_sup / n, running_var / n, time.time() - t0,
             )
@@ -401,7 +432,7 @@ def train(cfg: TrainConfig) -> dict:
             running_loss = running_ce = running_sup = running_var = running_acc = 0.0
             running_n = 0
 
-        if step % cfg.eval_every == 0 or step == cfg.steps:
+        if step % cfg.eval_every == 0 or step == total_steps:
             metrics = k_shot_eval(model, val_games, device, cfg)
             log.info(
                 "  eval @ %d:  top1=%.3f  top5=%.3f  within=%.3f  between=%.3f  sep=%+.3f  (n=%d)",
@@ -413,7 +444,8 @@ def train(cfg: TrainConfig) -> dict:
             if metrics["k5_top1"] > best_metric:
                 best_metric = metrics["k5_top1"]
                 torch.save(
-                    {"state_dict": model.state_dict(), "cfg": asdict(cfg),
+                    {"state_dict": model.state_dict(), "opt_state": opt.state_dict(),
+                     "cfg": asdict(cfg),
                      "player_to_label": player_to_label, "n_classes": n_classes,
                      "step": step, "metric": best_metric},
                     best_path,
@@ -421,9 +453,10 @@ def train(cfg: TrainConfig) -> dict:
                 log.info("    new best top1=%.3f -> %s", best_metric, best_path.name)
 
     torch.save(
-        {"state_dict": model.state_dict(), "cfg": asdict(cfg),
+        {"state_dict": model.state_dict(), "opt_state": opt.state_dict(),
+         "cfg": asdict(cfg),
          "player_to_label": player_to_label, "n_classes": n_classes,
-         "step": cfg.steps},
+         "step": total_steps},
         last_path,
     )
     (cfg.out_dir / "history.json").write_text(json.dumps(history, indent=2))
